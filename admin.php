@@ -264,10 +264,22 @@ if (isset($_GET['api'])) {
 
             try {
                 echo json_encode(Updater::getUpdateStatus());
-            } catch (Exception $e) {
+            } catch (Throwable $e) {
                 http_response_code(400);
                 echo json_encode(['success' => false, 'error' => $e->getMessage()]);
             }
+            break;
+
+        case 'update_install_status':
+            if (Urls::isWordPress()) {
+                echo json_encode([
+                    'success' => false,
+                    'error' => 'Use WordPress plugin updates for WordPress installs.'
+                ]);
+                break;
+            }
+
+            echo json_encode(Updater::getInstallStatus());
             break;
 
         case 'export_info':
@@ -451,7 +463,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             try {
                 echo json_encode(Updater::installLatest());
-            } catch (Exception $e) {
+            } catch (Throwable $e) {
                 http_response_code(400);
                 echo json_encode(['success' => false, 'error' => $e->getMessage()]);
             }
@@ -2940,13 +2952,17 @@ $isWp = Urls::isWordPress();
         let serverUrl = <?= json_encode(Urls::server()) ?>;
 
         // Helper for POST requests with CSRF token
-        async function postWithCsrf(url, body) {
+        async function postWithCsrf(url, body, options = {}) {
+            const headers = {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'X-CSRF-Token': getCsrfToken(),
+                ...(options.headers || {})
+            };
+
             return fetch(url, {
+                ...options,
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'X-CSRF-Token': getCsrfToken()
-                },
+                headers,
                 body: body
             });
         }
@@ -4489,6 +4505,7 @@ $isWp = Urls::isWordPress();
         let updateCheckInFlight = false;
         let updateStatusLoaded = false;
         let latestUpdateInfo = null;
+        let updateInstallPollTimer = null;
 
         async function checkForUpdate(showToastWhenCurrent = true) {
             if (updateCheckInFlight) return latestUpdateInfo;
@@ -4551,6 +4568,86 @@ $isWp = Urls::isWordPress();
             }
         }
 
+        async function getUpdateInstallStatus() {
+            const response = await fetch(buildAdminApiUrl({
+                api: 'update_install_status',
+                _: Date.now()
+            }), { credentials: 'same-origin' });
+            const result = await response.json().catch(() => null);
+
+            if (!response.ok || !result?.success) {
+                throw new Error(result?.error || 'Could not read update status');
+            }
+
+            return result;
+        }
+
+        function stopUpdateInstallPolling() {
+            if (updateInstallPollTimer) {
+                clearInterval(updateInstallPollTimer);
+                updateInstallPollTimer = null;
+            }
+        }
+
+        function startUpdateInstallPolling(reloadOnComplete = false) {
+            const statusEl = document.getElementById('update-status');
+            const checkBtn = document.getElementById('btn-check-update');
+            const installBtn = document.getElementById('btn-install-update');
+            let attempts = 0;
+
+            stopUpdateInstallPolling();
+
+            const poll = async () => {
+                attempts++;
+                try {
+                    const result = await getUpdateInstallStatus();
+                    if (statusEl && result.message) {
+                        statusEl.textContent = result.message;
+                    }
+
+                    if (result.state === 'complete' && result.updated) {
+                        stopUpdateInstallPolling();
+                        if (statusEl) {
+                            statusEl.textContent = `Updated to ${result.tag || 'latest release'}. Reloading...`;
+                        }
+                        showToast('Update installed', 'success');
+                        if (reloadOnComplete) {
+                            setTimeout(() => window.location.reload(), 1500);
+                        }
+                    } else if (result.state === 'failed') {
+                        stopUpdateInstallPolling();
+                        if (statusEl) {
+                            statusEl.textContent = result.error || result.message || 'Update failed';
+                        }
+                        showToast(statusEl?.textContent || 'Update failed', 'error');
+                    } else if (attempts >= 40) {
+                        stopUpdateInstallPolling();
+                        if (statusEl) {
+                            statusEl.textContent = 'Update status check timed out. Reload the page and check the current version.';
+                        }
+                    }
+                } catch (e) {
+                    if (attempts >= 3) {
+                        stopUpdateInstallPolling();
+                        if (statusEl) {
+                            statusEl.textContent = e.message || 'Could not read update status';
+                        }
+                    }
+                } finally {
+                    if (!updateInstallPollTimer) {
+                        if (checkBtn) checkBtn.disabled = false;
+                        if (installBtn) {
+                            installBtn.disabled = false;
+                            installBtn.textContent = 'Update';
+                        }
+                    }
+                }
+            };
+
+            updateInstallPollTimer = setInterval(poll, 3000);
+            poll();
+        }
+
         async function installUpdate() {
             let updateInfo = latestUpdateInfo;
             if (!updateInfo?.updateAvailable) {
@@ -4572,9 +4669,16 @@ $isWp = Urls::isWordPress();
             installBtn.disabled = true;
             installBtn.textContent = 'Updating...';
             statusEl.textContent = 'Downloading and installing update...';
+            stopUpdateInstallPolling();
+
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 70000);
+            let checkingServerStatus = false;
 
             try {
-                const response = await postWithCsrf(adminUrl, 'action=install_update');
+                const response = await postWithCsrf(adminUrl, 'action=install_update', {
+                    signal: controller.signal
+                });
                 const result = await response.json().catch(() => null);
 
                 if (!response.ok || !result?.success) {
@@ -4591,12 +4695,21 @@ $isWp = Urls::isWordPress();
                     installBtn.style.display = 'none';
                 }
             } catch (e) {
-                statusEl.textContent = e.message || 'Update failed';
-                showToast(statusEl.textContent, 'error');
-                installBtn.disabled = false;
+                if (e.name === 'AbortError') {
+                    checkingServerStatus = true;
+                    statusEl.textContent = 'Update request timed out. Checking server status...';
+                    startUpdateInstallPolling(true);
+                } else {
+                    statusEl.textContent = e.message || 'Update failed';
+                    showToast(statusEl.textContent, 'error');
+                    installBtn.disabled = false;
+                }
             } finally {
-                checkBtn.disabled = false;
-                installBtn.textContent = 'Update';
+                clearTimeout(timeoutId);
+                if (!checkingServerStatus) {
+                    checkBtn.disabled = false;
+                    installBtn.textContent = 'Update';
+                }
             }
         }
 

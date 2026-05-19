@@ -13,6 +13,7 @@ if (!defined('CASHUPAY_UPDATE_REPO')) {
 class Updater {
     private const RELEASE_API = 'https://api.github.com/repos/%s/releases/latest';
     private const PACKAGE_ASSET = 'cashupayserver.zip';
+    private const STATUS_FILE = 'update-status.json';
 
     /**
      * Check the latest GitHub release and compare it to this install.
@@ -49,67 +50,119 @@ class Updater {
      */
     public static function installLatest(): array {
         if (function_exists('set_time_limit')) {
-            @set_time_limit(180);
+            @set_time_limit(300);
+        }
+        if (function_exists('ignore_user_abort')) {
+            @ignore_user_abort(true);
         }
 
-        if (!class_exists('ZipArchive')) {
-            throw new Exception('PHP ZipArchive extension is required for updates.');
-        }
+        try {
+            self::writeInstallStatus('starting', 'Starting update...');
 
-        $status = self::getUpdateStatus();
-        if (empty($status['updateAvailable'])) {
+            if (!class_exists('ZipArchive')) {
+                throw new Exception('PHP ZipArchive extension is required for updates.');
+            }
+
+            self::writeInstallStatus('checking', 'Checking latest release...');
+            $status = self::getUpdateStatus();
+            if (empty($status['updateAvailable'])) {
+                $result = [
+                    'success' => true,
+                    'updated' => false,
+                    'message' => 'Already up to date.',
+                    'currentVersion' => $status['currentVersion'],
+                    'latestVersion' => $status['latestVersion'],
+                ];
+                self::writeInstallStatus('current', 'Already up to date.', $result);
+                return $result;
+            }
+
+            $assetUrl = $status['assetUrl'] ?? '';
+            self::validateAssetUrl($assetUrl, $status['latestTag']);
+
+            $dataDir = Database::getDataDir();
+            if (!is_dir($dataDir)) {
+                mkdir($dataDir, 0750, true);
+            }
+
+            $stamp = gmdate('Ymd-His') . '-' . self::randomSuffix();
+            $updatesDir = $dataDir . '/updates';
+            $backupDir = $dataDir . '/update-backups/' . $stamp;
+            $workDir = $updatesDir . '/' . $stamp;
+            $zipPath = $workDir . '/release.zip';
+            $extractDir = $workDir . '/extract';
+
+            self::ensureDir($workDir);
+            self::ensureDir($extractDir);
+            self::ensureDir($backupDir);
+
+            self::writeInstallStatus('downloading', 'Downloading update package...', [
+                'tag' => $status['latestTag'],
+                'assetSize' => $status['assetSize'] ?? null,
+            ]);
+            self::downloadFile($assetUrl, $zipPath);
+
+            self::writeInstallStatus('verifying', 'Verifying update package...', ['tag' => $status['latestTag']]);
+            self::verifyDigest($zipPath, $status['assetDigest'] ?? null);
+
+            self::writeInstallStatus('extracting', 'Extracting update package...', ['tag' => $status['latestTag']]);
+            self::extractZip($zipPath, $extractDir);
+
+            $packageRoot = self::findPackageRoot($extractDir);
+            $installRoot = dirname(__DIR__);
+            $entries = self::listPackageEntries($packageRoot);
+
+            self::writeInstallStatus('checking_files', 'Checking file permissions...', ['tag' => $status['latestTag']]);
+            self::preflightWritable($installRoot, $entries);
+
+            self::writeInstallStatus('installing', 'Installing update files...', ['tag' => $status['latestTag']]);
+            self::copyPackage($packageRoot, $installRoot, $backupDir, $entries);
+
+            if (function_exists('opcache_reset')) {
+                @opcache_reset();
+            }
+
+            self::removeDir($workDir);
+
+            $result = [
+                'success' => true,
+                'updated' => true,
+                'version' => $status['latestVersion'],
+                'tag' => $status['latestTag'],
+                'backupDir' => $backupDir,
+            ];
+            self::writeInstallStatus('complete', 'Update installed.', $result);
+            return $result;
+        } catch (Throwable $e) {
+            self::writeInstallStatus('failed', $e->getMessage(), [
+                'updated' => false,
+                'error' => $e->getMessage(),
+            ]);
+            throw $e;
+        }
+    }
+
+    public static function getInstallStatus(): array {
+        $path = self::statusPath();
+        if (!is_file($path)) {
             return [
                 'success' => true,
-                'updated' => false,
-                'message' => 'Already up to date.',
-                'currentVersion' => $status['currentVersion'],
-                'latestVersion' => $status['latestVersion'],
+                'state' => 'idle',
+                'message' => 'No update has been run yet.',
             ];
         }
 
-        $assetUrl = $status['assetUrl'] ?? '';
-        self::validateAssetUrl($assetUrl, $status['latestTag']);
-
-        $dataDir = Database::getDataDir();
-        if (!is_dir($dataDir)) {
-            mkdir($dataDir, 0750, true);
+        $data = json_decode((string)@file_get_contents($path), true);
+        if (!is_array($data)) {
+            return [
+                'success' => true,
+                'state' => 'unknown',
+                'message' => 'Update status is unavailable.',
+            ];
         }
 
-        $stamp = gmdate('Ymd-His') . '-' . self::randomSuffix();
-        $updatesDir = $dataDir . '/updates';
-        $backupDir = $dataDir . '/update-backups/' . $stamp;
-        $workDir = $updatesDir . '/' . $stamp;
-        $zipPath = $workDir . '/release.zip';
-        $extractDir = $workDir . '/extract';
-
-        self::ensureDir($workDir);
-        self::ensureDir($extractDir);
-        self::ensureDir($backupDir);
-
-        self::downloadFile($assetUrl, $zipPath);
-        self::verifyDigest($zipPath, $status['assetDigest'] ?? null);
-        self::extractZip($zipPath, $extractDir);
-
-        $packageRoot = self::findPackageRoot($extractDir);
-        $installRoot = dirname(__DIR__);
-        $entries = self::listPackageEntries($packageRoot);
-
-        self::preflightWritable($installRoot, $entries);
-        self::copyPackage($packageRoot, $installRoot, $backupDir, $entries);
-
-        if (function_exists('opcache_reset')) {
-            @opcache_reset();
-        }
-
-        self::removeDir($workDir);
-
-        return [
-            'success' => true,
-            'updated' => true,
-            'version' => $status['latestVersion'],
-            'tag' => $status['latestTag'],
-            'backupDir' => $backupDir,
-        ];
+        $data['success'] = true;
+        return $data;
     }
 
     private static function getLatestRelease(): array {
@@ -206,6 +259,8 @@ class Updater {
                 CURLOPT_MAXREDIRS => 5,
                 CURLOPT_TIMEOUT => 120,
                 CURLOPT_CONNECTTIMEOUT => 10,
+                CURLOPT_LOW_SPEED_LIMIT => 1024,
+                CURLOPT_LOW_SPEED_TIME => 20,
                 CURLOPT_HTTPHEADER => [
                     'User-Agent: CashuPayServer/' . CASHUPAY_VERSION,
                 ],
@@ -382,6 +437,29 @@ class Updater {
         }
 
         @rmdir($dir);
+    }
+
+    private static function writeInstallStatus(string $state, string $message, array $extra = []): void {
+        try {
+            $dataDir = Database::getDataDir();
+            if (!is_dir($dataDir)) {
+                @mkdir($dataDir, 0750, true);
+            }
+
+            $status = array_merge($extra, [
+                'state' => $state,
+                'message' => $message,
+                'updatedAt' => Database::timestamp(),
+            ]);
+
+            @file_put_contents(self::statusPath(), json_encode($status));
+        } catch (Throwable $e) {
+            // Status reporting must never block the update itself.
+        }
+    }
+
+    private static function statusPath(): string {
+        return rtrim(Database::getDataDir(), '/\\') . '/' . self::STATUS_FILE;
     }
 
     private static function randomSuffix(): string {

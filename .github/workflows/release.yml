@@ -1,0 +1,58 @@
+name: Release Packages
+
+on:
+  push:
+    tags:
+      - "*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    name: Build and attach release zips
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Prepare build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zip unzip
+
+      - name: Prepare required submodules
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git submodule sync -- cashu-wallet-php
+          git submodule update --init cashu-wallet-php
+
+          # The bundled mint discovery asset is committed under assets/js/.
+          # The pinned mint-discovery submodule commit is not available upstream,
+          # so do not let the build scripts try to rebuild it in CI.
+          rm -rf mint-discovery
+
+      - name: Build distribution packages
+        run: |
+          chmod +x scripts/build-standalone.sh scripts/build-wordpress-plugin.sh
+          ./scripts/build-standalone.sh
+          ./scripts/build-wordpress-plugin.sh
+
+      - name: Verify packages
+        run: |
+          test -f build/cashupayserver.zip
+          test -f build/cashupay-wordpress.zip
+          unzip -t build/cashupayserver.zip
+          unzip -t build/cashupay-wordpress.zip
+
+      - name: Attach packages to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            build/cashupayserver.zip
+            build/cashupay-wordpress.zip
+          generate_release_notes: true

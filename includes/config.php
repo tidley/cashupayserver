@@ -295,6 +295,18 @@ class Config {
     }
 
     /**
+     * Find a backup mint by normalized URL for a store.
+     */
+    public static function getStoreBackupMintByUrl(string $storeId, string $mintUrl): ?array {
+        return Database::fetchOne(
+            "SELECT id, mint_url, unit, priority, enabled, created_at
+             FROM store_mints
+             WHERE store_id = ? AND mint_url = ?",
+            [$storeId, self::normalizeMintUrl($mintUrl)]
+        );
+    }
+
+    /**
      * Get all mint URLs (primary + backups) for a store
      */
     public static function getStoreAllMintUrls(string $storeId): array {
@@ -321,7 +333,7 @@ class Config {
      * Add a backup mint to a store
      */
     public static function addStoreBackupMint(string $storeId, string $mintUrl, string $unit = 'sat', int $priority = 100): int {
-        $mintUrl = rtrim($mintUrl, '/');
+        $mintUrl = self::normalizeMintUrl($mintUrl);
 
         return (int) Database::insert('store_mints', [
             'store_id' => $storeId,
@@ -364,11 +376,18 @@ class Config {
      */
     public static function testMintConnection(string $mintUrl): array {
         try {
-            $client = new \Cashu\MintClient(rtrim($mintUrl, '/'));
+            $client = new \Cashu\MintClient(self::normalizeMintUrl($mintUrl));
             $info = $client->get('info');
             return ['success' => true, 'error' => null, 'info' => $info];
         } catch (\Exception $e) {
             return ['success' => false, 'error' => $e->getMessage(), 'info' => null];
         }
+    }
+
+    /**
+     * Normalize mint URLs before comparisons or persistence.
+     */
+    public static function normalizeMintUrl(string $mintUrl): string {
+        return rtrim(trim($mintUrl), '/');
     }
 }

@@ -224,6 +224,34 @@ if (isset($_GET['api'])) {
             echo json_encode($keys);
             break;
 
+        case 'get_backup_mints':
+            $storeId = $_GET['store_id'] ?? null;
+            if (!$storeId) {
+                http_response_code(400);
+                echo json_encode(['error' => 'Store ID required']);
+                break;
+            }
+            echo json_encode(Config::getStoreBackupMints($storeId));
+            break;
+
+        case 'mint_info':
+            $mintUrl = trim($_GET['url'] ?? '');
+            if ($mintUrl === '' || !filter_var($mintUrl, FILTER_VALIDATE_URL) || !preg_match('/^https?:\/\//i', $mintUrl)) {
+                http_response_code(400);
+                echo json_encode(['error' => 'Valid mint URL required']);
+                break;
+            }
+
+            $test = Config::testMintConnection($mintUrl);
+            echo json_encode([
+                'url' => $mintUrl,
+                'info' => $test['info'],
+                'error' => !$test['success'],
+                'message' => $test['error'],
+                'fetchedAt' => Database::timestamp(),
+            ]);
+            break;
+
         case 'export_info':
             $storeId = $_GET['store_id'] ?? null;
             if (!$storeId || !Config::isStoreConfigured($storeId)) {
@@ -1295,6 +1323,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
                 if (empty($mintUrl)) {
                     throw new Exception('Mint URL required');
+                }
+
+                $mintUrl = Config::normalizeMintUrl($mintUrl);
+                if (!filter_var($mintUrl, FILTER_VALIDATE_URL) || !preg_match('/^https?:\/\//i', $mintUrl)) {
+                    throw new Exception('Valid mint URL required');
+                }
+
+                $store = Config::getStore($storeId);
+                if (!$store) {
+                    throw new Exception('Store not found');
+                }
+
+                if (!empty($store['mint_url']) && Config::normalizeMintUrl($store['mint_url']) === $mintUrl) {
+                    throw new Exception('That mint is already configured as the primary mint.');
+                }
+
+                $existing = Config::getStoreBackupMintByUrl($storeId, $mintUrl);
+                if ($existing) {
+                    if ((int)($existing['enabled'] ?? 1) !== 1) {
+                        Config::updateStoreBackupMint((int)$existing['id'], ['enabled' => 1]);
+                    }
+                    echo json_encode([
+                        'success' => true,
+                        'id' => (int)$existing['id'],
+                        'already_exists' => true
+                    ]);
+                    break;
                 }
 
                 // Test connection first
@@ -2830,6 +2885,16 @@ $isWp = Urls::isWordPress();
                 },
                 body: body
             });
+        }
+
+        function buildAdminApiUrl(params) {
+            const url = new URL(adminUrl, window.location.href);
+            Object.entries(params).forEach(([key, value]) => {
+                if (value !== undefined && value !== null) {
+                    url.searchParams.set(key, value);
+                }
+            });
+            return url.toString();
         }
 
         // Format amount for display based on unit (handles fiat decimals)
@@ -4382,6 +4447,7 @@ $isWp = Urls::isWordPress();
         let discoveredMints = [];
         let discoveryCallback = null;
         let discoveryContext = null;
+        let mintDiscoveryRunId = 0;
 
         function openBackupMintDiscovery(storeId, storeName) {
             discoveryContext = 'backup';
@@ -4420,6 +4486,7 @@ $isWp = Urls::isWordPress();
         }
 
         function closeMintDiscoveryModal() {
+            mintDiscoveryRunId++;
             document.getElementById('mint-discovery-modal').style.display = 'none';
             if (mintDiscoveryInstance) {
                 mintDiscoveryInstance.close();
@@ -4427,10 +4494,119 @@ $isWp = Urls::isWordPress();
             }
         }
 
+        async function fetchMintInfoFromServer(mintUrl) {
+            try {
+                const response = await fetch(buildAdminApiUrl({
+                    api: 'mint_info',
+                    url: mintUrl
+                }), { credentials: 'same-origin' });
+                const result = await response.json().catch(() => null);
+
+                if (!response.ok || !result) {
+                    return {
+                        url: mintUrl,
+                        info: null,
+                        error: true,
+                        fetchedAt: Math.floor(Date.now() / 1000)
+                    };
+                }
+
+                return {
+                    url: mintUrl,
+                    info: result.info || null,
+                    error: !!result.error,
+                    message: result.message || null,
+                    fetchedAt: result.fetchedAt || Math.floor(Date.now() / 1000)
+                };
+            } catch (e) {
+                return {
+                    url: mintUrl,
+                    info: null,
+                    error: true,
+                    fetchedAt: Math.floor(Date.now() / 1000)
+                };
+            }
+        }
+
+        async function enrichDiscoveredMintsFromServer(runId) {
+            const statusEl = document.getElementById('mint-discovery-status');
+            const urls = [...new Set(discoveredMints.map(m => m.url).filter(Boolean))];
+            if (urls.length === 0) return;
+
+            let completed = 0;
+            let cursor = 0;
+            const concurrency = Math.min(6, urls.length);
+
+            const updateList = () => {
+                if (runId !== mintDiscoveryRunId) return;
+                if (mintDiscoveryInstance?.getRecommendations) {
+                    discoveredMints = mintDiscoveryInstance.getRecommendations();
+                }
+                renderDiscoveredMints();
+                if (statusEl) {
+                    statusEl.textContent = `Checking mint status (${completed}/${urls.length})...`;
+                }
+            };
+
+            const worker = async () => {
+                while (runId === mintDiscoveryRunId) {
+                    const index = cursor++;
+                    if (index >= urls.length) break;
+
+                    const url = urls[index];
+                    const result = await fetchMintInfoFromServer(url);
+                    if (runId !== mintDiscoveryRunId) return;
+
+                    if (mintDiscoveryInstance?.aggregator) {
+                        mintDiscoveryInstance.aggregator.setHttpInfo(url, result);
+                    }
+                    if (mintDiscoveryInstance?.storage) {
+                        try {
+                            await mintDiscoveryInstance.storage.saveHttpInfo(url, result);
+                        } catch {}
+                    }
+
+                    const mintIndex = discoveredMints.findIndex(m => m.url === url);
+                    if (mintIndex !== -1) {
+                        discoveredMints[mintIndex] = {
+                            ...discoveredMints[mintIndex],
+                            info: result.info || undefined,
+                            error: result.error,
+                            lastHttpInfoFetchAt: result.fetchedAt
+                        };
+                    }
+
+                    completed++;
+                    if (completed % 5 === 0 || completed === urls.length) {
+                        updateList();
+                    }
+                }
+            };
+
+            await Promise.all(Array.from({ length: concurrency }, () => worker()));
+
+            if (runId === mintDiscoveryRunId) {
+                if (mintDiscoveryInstance?.getRecommendations) {
+                    discoveredMints = mintDiscoveryInstance.getRecommendations();
+                }
+                renderDiscoveredMints();
+                if (statusEl) {
+                    statusEl.textContent = `Found ${discoveredMints.length} mints`;
+                }
+            }
+        }
+
         async function startMintDiscovery() {
+            const runId = ++mintDiscoveryRunId;
             const listEl = document.getElementById('mint-discovery-list');
             const loadingEl = document.getElementById('mint-discovery-loading');
             const statusEl = document.getElementById('mint-discovery-status');
+
+            if (mintDiscoveryInstance) {
+                mintDiscoveryInstance.close();
+                mintDiscoveryInstance = null;
+            }
+            discoveredMints = [];
 
             loadingEl.style.display = 'block';
             listEl.innerHTML = '';
@@ -4449,6 +4625,7 @@ $isWp = Urls::isWordPress();
                 });
 
                 discoveredMints = await mintDiscoveryInstance.discover({
+                    skipHttpFetch: true,
                     onProgress: (progress) => {
                         if (progress.phase === 'nostr' && progress.step === 'mint-info') {
                             statusEl.textContent = 'Fetching mint announcements...';
@@ -4460,10 +4637,13 @@ $isWp = Urls::isWordPress();
                     }
                 });
 
+                if (runId !== mintDiscoveryRunId) return;
                 loadingEl.style.display = 'none';
-                statusEl.textContent = `Found ${discoveredMints.length} mints`;
+                statusEl.textContent = `Found ${discoveredMints.length} mints; checking status...`;
                 renderDiscoveredMints();
+                await enrichDiscoveredMintsFromServer(runId);
             } catch (error) {
+                if (runId !== mintDiscoveryRunId) return;
                 loadingEl.style.display = 'none';
                 statusEl.textContent = 'Error: ' + error.message;
             }
@@ -4515,6 +4695,7 @@ $isWp = Urls::isWordPress();
                 const name = m.info?.name || 'Unknown Mint';
                 const isOnline = !m.error && m.info;
                 const units = getUnitsFromMintInfo(m.info);
+                const selectArg = JSON.stringify(m.url || '').replace(/</g, '\\u003c');
 
                 return `
                     <div style="background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin-bottom: 0.75rem;">
@@ -4532,7 +4713,7 @@ $isWp = Urls::isWordPress();
                         <div style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.75rem;">
                             ${units.length > 0 ? units.map(u => u.toUpperCase()).join(' \u2022 ') : 'Unknown units'}
                         </div>
-                        <button type="button" class="btn btn-full" style="font-size: 0.85rem;" onclick="selectDiscoveredMint('${escapeHtml(m.url)}')">Select</button>
+                        <button type="button" class="btn btn-full" style="font-size: 0.85rem;" onclick="selectDiscoveredMint(${selectArg})">Select</button>
                     </div>
                 `;
             }).join('');
@@ -4556,8 +4737,8 @@ $isWp = Urls::isWordPress();
 
             // Load API keys and backup mints in parallel
             const [keysRes, mintsRes] = await Promise.all([
-                fetch(`${adminUrl}?api=api_keys&store_id=${storeId}`),
-                fetch(`${adminUrl}?api=get_backup_mints&store_id=${storeId}`)
+                fetch(buildAdminApiUrl({ api: 'api_keys', store_id: storeId })),
+                fetch(buildAdminApiUrl({ api: 'get_backup_mints', store_id: storeId }))
             ]);
             const keys = await keysRes.json();
             const backupMintsRes = await mintsRes.json();
@@ -4684,14 +4865,18 @@ $isWp = Urls::isWordPress();
             const unit = store?.mint_unit || 'sat';
 
             try {
-                const response = await postWithCsrf(adminUrl,
-                    `action=add_backup_mint&store_id=${storeId}&mint_url=${encodeURIComponent(mintUrl)}&unit=${unit}`
-                );
+                const body = new URLSearchParams({
+                    action: 'add_backup_mint',
+                    store_id: storeId,
+                    mint_url: mintUrl,
+                    unit
+                });
+                const response = await postWithCsrf(adminUrl, body.toString());
 
                 const result = await response.json();
 
                 if (response.ok) {
-                    showToast('Backup mint added!', 'success');
+                    showToast(result.already_exists ? 'Backup mint already exists' : 'Backup mint added!', 'success');
                     showStoreDetails(storeId, storeName);
                 } else {
                     showToast(result.error || 'Failed to add backup mint', 'error');

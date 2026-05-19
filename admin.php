@@ -4635,7 +4635,6 @@ $isWp = Urls::isWordPress();
         let discoveryContext = null;
         let mintDiscoveryRunId = 0;
         const MINT_DISCOVERY_RELAYS = [
-            'wss://relay.damus.io',
             'wss://nos.lol',
             'wss://relay.primal.net'
         ];

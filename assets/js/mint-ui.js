@@ -16,7 +16,6 @@ class MintDiscoveryUI {
         this.modalId = options.modalId || 'mint-discovery-modal';
         this.csrf = options.csrf || null;
         this.relays = options.relays || [
-            'wss://relay.damus.io',
             'wss://nos.lol',
             'wss://relay.primal.net'
         ];

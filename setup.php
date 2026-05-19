@@ -1559,7 +1559,6 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
     var discoveredMints = [];
     var disclaimerAcknowledged = false;
     var MINT_DISCOVERY_RELAYS = [
-        'wss://relay.damus.io',
         'wss://nos.lol',
         'wss://relay.primal.net'
     ];

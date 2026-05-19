@@ -4815,24 +4815,97 @@ $isWp = Urls::isWordPress();
                     nostrTimeout: 15000
                 });
 
-                discoveredMints = await mintDiscoveryInstance.discover({
-                    skipHttpFetch: true,
-                    onProgress: (progress) => {
-                        if (progress.phase === 'nostr' && progress.step === 'mint-info') {
-                            statusEl.textContent = 'Fetching mint announcements...';
-                        } else if (progress.phase === 'nostr' && progress.step === 'reviews') {
-                            statusEl.textContent = 'Fetching reviews...';
-                        } else if (progress.phase === 'http') {
-                            statusEl.textContent = 'Checking mint status...';
-                        }
+                if (!mintDiscoveryInstance.aggregator || !mintDiscoveryInstance.nostrClient) {
+                    throw new Error('MintDiscovery internals unavailable');
+                }
+
+                const aggregator = mintDiscoveryInstance.aggregator;
+                const storage = mintDiscoveryInstance.storage;
+                let mintInfoComplete = false;
+                let reviewsComplete = false;
+                let finished = false;
+                let mintInfoSub = null;
+                let reviewSub = null;
+
+                const renderRecommendation = (url) => {
+                    if (runId !== mintDiscoveryRunId || !url) return;
+                    const mint = aggregator.getRecommendation(url);
+                    if (!mint) return;
+
+                    const existingIndex = discoveredMints.findIndex(m => m.url === mint.url);
+                    if (existingIndex >= 0) {
+                        discoveredMints[existingIndex] = mint;
+                    } else {
+                        discoveredMints.push(mint);
+                    }
+
+                    discoveredMints.sort((a, b) => {
+                        const countDiff = (b.reviewsCount || 0) - (a.reviewsCount || 0);
+                        if (countDiff !== 0) return countDiff;
+                        return (b.averageRating || 0) - (a.averageRating || 0);
+                    });
+
+                    if (discoveredMints.length > 0) {
+                        loadingEl.style.display = 'none';
+                    }
+                    renderDiscoveredMints();
+                };
+
+                const finishDiscovery = async () => {
+                    if (finished || runId !== mintDiscoveryRunId) return;
+                    finished = true;
+                    clearTimeout(discoveryTimeout);
+
+                    try { mintInfoSub?.close?.('discovery complete'); } catch {}
+                    try { reviewSub?.close?.('discovery complete'); } catch {}
+
+                    discoveredMints = aggregator.getRecommendations();
+                    loadingEl.style.display = 'none';
+                    renderDiscoveredMints();
+
+                    if (discoveredMints.length === 0) {
+                        statusEl.textContent = 'No mints found';
+                        return;
+                    }
+
+                    statusEl.textContent = `Found ${discoveredMints.length} mints; checking status...`;
+                    await enrichDiscoveredMintsFromServer(runId);
+                };
+
+                const maybeFinishDiscovery = () => {
+                    if (mintInfoComplete && reviewsComplete) {
+                        finishDiscovery();
+                    }
+                };
+
+                const discoveryTimeout = setTimeout(finishDiscovery, 16000);
+                statusEl.textContent = 'Subscribing to Nostr relays...';
+
+                mintInfoSub = mintDiscoveryInstance.nostrClient.subscribeMintInfo({
+                    onEvent: (mintInfo) => {
+                        aggregator.addMintInfo(mintInfo);
+                        renderRecommendation(mintInfo.url);
+                    },
+                    onEose: () => {
+                        mintInfoComplete = true;
+                        statusEl.textContent = 'Fetching reviews...';
+                        maybeFinishDiscovery();
                     }
                 });
 
-                if (runId !== mintDiscoveryRunId) return;
-                loadingEl.style.display = 'none';
-                statusEl.textContent = `Found ${discoveredMints.length} mints; checking status...`;
-                renderDiscoveredMints();
-                await enrichDiscoveredMintsFromServer(runId);
+                reviewSub = mintDiscoveryInstance.nostrClient.subscribeReviews({
+                    onEvent: async (review) => {
+                        aggregator.addReview(review);
+                        if (storage) {
+                            try { await storage.saveReview(review); } catch {}
+                        }
+                        renderRecommendation(review.url);
+                    },
+                    onEose: () => {
+                        reviewsComplete = true;
+                        maybeFinishDiscovery();
+                    }
+                });
             } catch (error) {
                 if (runId !== mintDiscoveryRunId) return;
                 loadingEl.style.display = 'none';

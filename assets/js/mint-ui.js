@@ -15,6 +15,11 @@ class MintDiscoveryUI {
         this.mints = [];
         this.modalId = options.modalId || 'mint-discovery-modal';
         this.csrf = options.csrf || null;
+        this.relays = options.relays || [
+            'wss://relay.damus.io',
+            'wss://nos.lol',
+            'wss://relay.primal.net'
+        ];
     }
 
     /**
@@ -25,6 +30,7 @@ class MintDiscoveryUI {
             throw new Error('MintDiscovery library not loaded');
         }
         this.discovery = MintDiscovery.create({
+            relays: this.relays,
             httpTimeout: 8000,
             nostrTimeout: 15000
         });

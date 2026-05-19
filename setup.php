@@ -1558,6 +1558,11 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
     var mintDiscoveryInstance = null;
     var discoveredMints = [];
     var disclaimerAcknowledged = false;
+    var MINT_DISCOVERY_RELAYS = [
+        'wss://relay.damus.io',
+        'wss://nos.lol',
+        'wss://relay.primal.net'
+    ];
 
     function openMintDiscovery() {
         document.getElementById('mint-discovery-modal').style.display = 'flex';
@@ -1644,6 +1649,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
         }
 
         mintDiscoveryInstance = MintDiscovery.create({
+            relays: MINT_DISCOVERY_RELAYS,
             httpTimeout: 8000,
             nostrTimeout: 15000
         });

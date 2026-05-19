@@ -4634,6 +4634,11 @@ $isWp = Urls::isWordPress();
         let discoveryCallback = null;
         let discoveryContext = null;
         let mintDiscoveryRunId = 0;
+        const MINT_DISCOVERY_RELAYS = [
+            'wss://relay.damus.io',
+            'wss://nos.lol',
+            'wss://relay.primal.net'
+        ];
 
         function openBackupMintDiscovery(storeId, storeName) {
             discoveryContext = 'backup';
@@ -4806,6 +4811,7 @@ $isWp = Urls::isWordPress();
 
             try {
                 mintDiscoveryInstance = MintDiscovery.create({
+                    relays: MINT_DISCOVERY_RELAYS,
                     httpTimeout: 8000,
                     nostrTimeout: 15000
                 });

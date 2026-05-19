@@ -2854,8 +2854,8 @@ $isWp = Urls::isWordPress();
     <div class="toast" id="toast"></div>
 
     <!-- Mint Discovery Modal -->
-    <div id="mint-discovery-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 1100; justify-content: center; align-items: center;">
-        <div class="modal-content" style="max-width: 700px; max-height: 85vh; overflow: hidden; display: flex; flex-direction: column; background: var(--card-bg); border-radius: 12px; padding: 1.5rem;">
+    <div id="mint-discovery-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.82); z-index: 1100; justify-content: center; align-items: center;">
+        <div class="modal-content" style="max-width: 700px; max-height: 85vh; overflow: hidden; display: flex; flex-direction: column; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; box-shadow: 0 24px 80px rgba(0,0,0,0.65);">
             <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
                 <h3 style="margin: 0;">Discover Mints</h3>
                 <button type="button" onclick="closeMintDiscoveryModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; color: var(--text);">&times;</button>
@@ -3223,6 +3223,13 @@ $isWp = Urls::isWordPress();
             });
 
             document.addEventListener('click', (e) => {
+                const mintSelectButton = e.target.closest('[data-action="select-discovered-mint"]');
+                if (mintSelectButton) {
+                    e.preventDefault();
+                    selectDiscoveredMint(decodeURIComponent(mintSelectButton.dataset.url || ''));
+                    return;
+                }
+
                 const discoverButton = e.target.closest('[data-action="discover-backup-mint"]');
                 if (!discoverButton) return;
 
@@ -4970,10 +4977,10 @@ $isWp = Urls::isWordPress();
                 const name = m.info?.name || 'Unknown Mint';
                 const isOnline = !m.error && m.info;
                 const units = getUnitsFromMintInfo(m.info);
-                const selectArg = JSON.stringify(m.url || '').replace(/</g, '\\u003c');
+                const selectUrl = encodeURIComponent(m.url || '');
 
                 return `
-                    <div style="background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin-bottom: 0.75rem;">
+                    <div style="background: var(--bg-primary); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin-bottom: 0.75rem;">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
                             <div style="font-size: 0.9rem;">
                                 ${renderDiscoveryStars(m.averageRating)}
@@ -4988,7 +4995,7 @@ $isWp = Urls::isWordPress();
                         <div style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.75rem;">
                             ${units.length > 0 ? units.map(u => u.toUpperCase()).join(' \u2022 ') : 'Unknown units'}
                         </div>
-                        <button type="button" class="btn btn-full" style="font-size: 0.85rem;" onclick="selectDiscoveredMint(${selectArg})">Select</button>
+                        <button type="button" class="btn btn-full" data-action="select-discovered-mint" data-url="${selectUrl}" style="font-size: 0.85rem;">Select</button>
                     </div>
                 `;
             }).join('');

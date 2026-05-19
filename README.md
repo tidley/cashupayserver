@@ -61,13 +61,14 @@ CashuPayServer sits between custodial payment gateways and full self-hosting:
 
 - PHP 8.0 or higher
 - Extensions: `curl`, `json`, `sqlite3`, `gmp`
+- Optional dashboard updates require the `zip` extension (`ZipArchive`)
 - Apache with mod_rewrite, nginx, or any PHP-capable web server
 
 ## Installation
 
 ### Standalone (Any PHP Hosting)
 
-1. **Download** the latest `cashupayserver.zip` from [GitHub Releases](https://github.com/jooray/cashupayserver/releases)
+1. **Download** the latest `cashupayserver.zip` from [GitHub Releases](https://github.com/tidley/cashupayserver/releases)
 2. **Extract** the zip file
 3. **Upload** to your web hosting via FTP or file manager
 4. **Open** the URL in your browser (e.g., `https://yourdomain.com/cashupayserver/`)
@@ -75,7 +76,7 @@ CashuPayServer sits between custodial payment gateways and full self-hosting:
 
 ### WordPress Plugin
 
-1. **Download** `cashupay-wordpress.zip` from [GitHub Releases](https://github.com/jooray/cashupayserver/releases)
+1. **Download** `cashupay-wordpress.zip` from [GitHub Releases](https://github.com/tidley/cashupayserver/releases)
 2. In WordPress admin, go to **Plugins → Add New → Upload Plugin**
 3. **Upload** the zip file and activate
 4. Go to **Tools → CashuPay** to configure
@@ -173,7 +174,7 @@ Your seed phrase is your backup. Write it down and store it safely. If you lose 
 The simplest way to run CashuPayServer locally:
 
 ```bash
-git clone --recurse-submodules https://github.com/jooray/cashupayserver.git
+git clone --recurse-submodules https://github.com/tidley/cashupayserver.git
 cd cashupayserver
 php -S localhost:8000 router.php
 ```
@@ -191,7 +192,7 @@ See [DOCKER.md](DOCKER.md) for detailed setup instructions, persistent data volu
 #### Standalone + WordPress (for testing both)
 
 ```bash
-git clone --recurse-submodules https://github.com/jooray/cashupayserver.git
+git clone --recurse-submodules https://github.com/tidley/cashupayserver.git
 cd cashupayserver
 
 docker build -f docker/Dockerfile.standalone -t cashupayserver-standalone .
@@ -385,4 +386,4 @@ MIT License - see [LICENSE](LICENSE) file.
 ## Links
 
 - **Website**: [cashupayserver.org](https://cashupayserver.org/)
-- **Issues**: [GitHub Issues](https://github.com/jooray/cashupayserver/issues)
+- **Issues**: [GitHub Issues](https://github.com/tidley/cashupayserver/issues)

@@ -13,6 +13,7 @@ require_once __DIR__ . '/includes/lightning_address.php';
 require_once __DIR__ . '/includes/background.php';
 require_once __DIR__ . '/includes/security.php';
 require_once __DIR__ . '/includes/urls.php';
+require_once __DIR__ . '/includes/updater.php';
 
 use Cashu\ProofState;
 
@@ -252,6 +253,23 @@ if (isset($_GET['api'])) {
             ]);
             break;
 
+        case 'update_status':
+            if (Urls::isWordPress()) {
+                echo json_encode([
+                    'success' => false,
+                    'error' => 'Use WordPress plugin updates for WordPress installs.'
+                ]);
+                break;
+            }
+
+            try {
+                echo json_encode(Updater::getUpdateStatus());
+            } catch (Exception $e) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+            }
+            break;
+
         case 'export_info':
             $storeId = $_GET['store_id'] ?? null;
             if (!$storeId || !Config::isStoreConfigured($storeId)) {
@@ -421,6 +439,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } else {
                 http_response_code(400);
                 echo json_encode(['error' => 'Invalid mode']);
+            }
+            break;
+
+        case 'install_update':
+            if (Urls::isWordPress()) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Use WordPress plugin updates for WordPress installs.']);
+                break;
+            }
+
+            try {
+                echo json_encode(Updater::installLatest());
+            } catch (Exception $e) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => $e->getMessage()]);
             }
             break;
 
@@ -2581,6 +2614,37 @@ $isWp = Urls::isWordPress();
                         </div>
                     </div>
                 </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">Application Update</div>
+                    </div>
+                    <div class="card-body">
+                        <div style="display: grid; gap: 0.5rem; margin-bottom: 1rem;">
+                            <div style="display: flex; justify-content: space-between; gap: 1rem;">
+                                <span style="color: var(--text-secondary);">Current</span>
+                                <span id="update-current-version">v<?= htmlspecialchars(CASHUPAY_VERSION) ?></span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; gap: 1rem;">
+                                <span style="color: var(--text-secondary);">Latest</span>
+                                <span id="update-latest-version">Not checked</span>
+                            </div>
+                        </div>
+
+                        <p id="update-status" class="form-help" style="margin-bottom: 1rem;">
+                            Check GitHub releases for a newer standalone package.
+                        </p>
+
+                        <div style="display: flex; gap: 0.5rem;">
+                            <button class="btn btn-secondary" id="btn-check-update" style="flex: 1;">
+                                Check
+                            </button>
+                            <button class="btn" id="btn-install-update" style="flex: 1; display: none;" disabled>
+                                Update
+                            </button>
+                        </div>
+                    </div>
+                </div>
                 <?php endif; ?>
 
                 <div class="card">
@@ -2599,7 +2663,7 @@ $isWp = Urls::isWordPress();
 
                 <div style="text-align: center; padding: 1.5rem 0; color: var(--text-muted); font-size: 0.8rem;">
                     CashuPayServer v<?= CASHUPAY_VERSION ?> &middot;
-                    <a href="https://github.com/jooray/cashupayserver/releases" target="_blank" rel="noopener"
+                    <a href="https://github.com/tidley/cashupayserver/releases" target="_blank" rel="noopener"
                        style="color: var(--text-secondary); text-decoration: none;">Check for updates</a>
                 </div>
             </div>
@@ -3121,6 +3185,11 @@ $isWp = Urls::isWordPress();
                 initUrlModeSettings();
             }
 
+            if (document.getElementById('btn-check-update')) {
+                document.getElementById('btn-check-update').addEventListener('click', () => checkForUpdate(true));
+                document.getElementById('btn-install-update').addEventListener('click', installUpdate);
+            }
+
             // Stores
             document.getElementById('btn-create-store').addEventListener('click', () => {
                 window.location.href = setupUrl + '?mode=add_store';
@@ -3180,6 +3249,9 @@ $isWp = Urls::isWordPress();
 
             if (view === 'invoices') loadInvoices();
             if (view === 'stores') loadStoreSettings();
+            if (view === 'settings' && document.getElementById('btn-check-update') && !updateStatusLoaded) {
+                checkForUpdate(false);
+            }
         }
 
         // Track currently selected store
@@ -4393,6 +4465,120 @@ $isWp = Urls::isWordPress();
                 }
             } catch (e) {
                 showToast('Failed to save URL mode', 'error');
+            }
+        }
+
+        let updateCheckInFlight = false;
+        let updateStatusLoaded = false;
+        let latestUpdateInfo = null;
+
+        async function checkForUpdate(showToastWhenCurrent = true) {
+            if (updateCheckInFlight) return latestUpdateInfo;
+
+            const statusEl = document.getElementById('update-status');
+            const latestEl = document.getElementById('update-latest-version');
+            const checkBtn = document.getElementById('btn-check-update');
+            const installBtn = document.getElementById('btn-install-update');
+
+            if (!statusEl || !latestEl || !checkBtn || !installBtn) return null;
+
+            updateCheckInFlight = true;
+            checkBtn.disabled = true;
+            installBtn.disabled = true;
+            statusEl.textContent = 'Checking for updates...';
+
+            try {
+                const response = await fetch(buildAdminApiUrl({
+                    api: 'update_status',
+                    _: Date.now()
+                }), { credentials: 'same-origin' });
+                const result = await response.json().catch(() => null);
+
+                if (!response.ok || !result?.success) {
+                    throw new Error(result?.error || 'Update check failed');
+                }
+
+                latestUpdateInfo = result;
+                latestEl.textContent = result.latestTag || (result.latestVersion ? `v${result.latestVersion}` : 'Unknown');
+
+                if (result.updateAvailable) {
+                    if (result.zipAvailable) {
+                        statusEl.textContent = `${result.latestTag || 'A new version'} is available.`;
+                        installBtn.style.display = 'block';
+                        installBtn.disabled = false;
+                    } else {
+                        statusEl.textContent = `${result.latestTag || 'A new version'} is available, but PHP ZipArchive is required.`;
+                        installBtn.style.display = 'none';
+                    }
+                } else {
+                    statusEl.textContent = 'You are running the latest version.';
+                    installBtn.style.display = 'none';
+                    if (showToastWhenCurrent) {
+                        showToast('Already up to date', 'success');
+                    }
+                }
+
+                updateStatusLoaded = true;
+                return result;
+            } catch (e) {
+                latestUpdateInfo = null;
+                latestEl.textContent = 'Unavailable';
+                statusEl.textContent = e.message || 'Update check failed';
+                installBtn.style.display = 'none';
+                showToast(statusEl.textContent, 'error');
+                return null;
+            } finally {
+                updateCheckInFlight = false;
+                checkBtn.disabled = false;
+            }
+        }
+
+        async function installUpdate() {
+            let updateInfo = latestUpdateInfo;
+            if (!updateInfo?.updateAvailable) {
+                updateInfo = await checkForUpdate(false);
+            }
+
+            if (!updateInfo?.updateAvailable) return;
+
+            const label = updateInfo.latestTag || `v${updateInfo.latestVersion}`;
+            if (!confirm(`Install ${label}? Current files will be backed up before the update.`)) {
+                return;
+            }
+
+            const statusEl = document.getElementById('update-status');
+            const checkBtn = document.getElementById('btn-check-update');
+            const installBtn = document.getElementById('btn-install-update');
+
+            checkBtn.disabled = true;
+            installBtn.disabled = true;
+            installBtn.textContent = 'Updating...';
+            statusEl.textContent = 'Downloading and installing update...';
+
+            try {
+                const response = await postWithCsrf(adminUrl, 'action=install_update');
+                const result = await response.json().catch(() => null);
+
+                if (!response.ok || !result?.success) {
+                    throw new Error(result?.error || 'Update failed');
+                }
+
+                if (result.updated) {
+                    statusEl.textContent = `Updated to ${result.tag || label}. Reloading...`;
+                    showToast('Update installed', 'success');
+                    setTimeout(() => window.location.reload(), 1500);
+                } else {
+                    statusEl.textContent = result.message || 'Already up to date.';
+                    showToast('Already up to date', 'success');
+                    installBtn.style.display = 'none';
+                }
+            } catch (e) {
+                statusEl.textContent = e.message || 'Update failed';
+                showToast(statusEl.textContent, 'error');
+                installBtn.disabled = false;
+            } finally {
+                checkBtn.disabled = false;
+                installBtn.textContent = 'Update';
             }
         }
 

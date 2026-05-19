@@ -8,7 +8,7 @@
 require_once __DIR__ . '/database.php';
 
 // Version
-define('CASHUPAY_VERSION', '0.1.5');
+define('CASHUPAY_VERSION', '0.1.6');
 
 // Donation settings for supporting CashuPayServer development
 define('CASHUPAY_DONATION_PERCENT', 1); // 1% donation

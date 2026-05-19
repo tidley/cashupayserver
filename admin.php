@@ -2854,7 +2854,7 @@ $isWp = Urls::isWordPress();
     <div class="toast" id="toast"></div>
 
     <!-- Mint Discovery Modal -->
-    <div id="mint-discovery-modal" class="modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 1100; justify-content: center; align-items: center;">
+    <div id="mint-discovery-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 1100; justify-content: center; align-items: center;">
         <div class="modal-content" style="max-width: 700px; max-height: 85vh; overflow: hidden; display: flex; flex-direction: column; background: var(--card-bg); border-radius: 12px; padding: 1.5rem;">
             <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
                 <h3 style="margin: 0;">Discover Mints</h3>
@@ -3220,6 +3220,17 @@ $isWp = Urls::isWordPress();
                         overlay.classList.remove('visible');
                     }
                 });
+            });
+
+            document.addEventListener('click', (e) => {
+                const discoverButton = e.target.closest('[data-action="discover-backup-mint"]');
+                if (!discoverButton) return;
+
+                e.preventDefault();
+                openBackupMintDiscovery(
+                    discoverButton.dataset.storeId || '',
+                    discoverButton.dataset.storeName || ''
+                );
             });
         }
 
@@ -5063,7 +5074,7 @@ $isWp = Urls::isWordPress();
                         <div id="add-backup-mint-form" style="display: none; margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--border);">
                             <div style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem;">
                                 <input type="url" id="backup-mint-url" class="form-input" placeholder="https://mint.example.com" style="flex: 1; font-size: 0.85rem;">
-                                <button class="btn btn-secondary" style="font-size: 0.8rem; white-space: nowrap;" onclick="openBackupMintDiscovery('${storeId}', '${escapeHtml(storeName)}')">Discover</button>
+                                <button type="button" class="btn btn-secondary" data-action="discover-backup-mint" data-store-id="${escapeHtml(storeId)}" data-store-name="${escapeHtml(storeName)}" style="font-size: 0.8rem; white-space: nowrap;">Discover</button>
                             </div>
                             <div style="display: flex; gap: 0.5rem;">
                                 <button class="btn btn-full" style="font-size: 0.8rem;" onclick="addBackupMint('${storeId}', '${escapeHtml(storeName)}')">Add</button>
